@@ -21,3 +21,5 @@
 | 阶跃星辰 | ❌ | ❌  | ❌ | ✅ |[点击这里](livekit-plugins/livekit-plugins-stepfun) |
 
 
+## 感谢
+@di-osc 
