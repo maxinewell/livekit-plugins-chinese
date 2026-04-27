@@ -1,32 +1,24 @@
 [project]
 name = "livekit-plugins-tencent"
 dynamic = ["version"]
-description = "LiveKit Agent Plugins for Tencent"
+description = "LiveKit Agents plugin for Tencent Cloud streaming TTS"
 readme = "README.md"
-authors = [
-    { name = "wangmengdi", email = "790990241@qq.com" }
-]
-keywords = ["webrtc", "realtime", "audio", "livekit", "tencent", "stt", "tts"]
 requires-python = ">=3.10"
+authors = [{ name = "LiveKit Tencent Plugin" }]
+keywords = ["webrtc", "realtime", "audio", "livekit", "tencent", "tts"]
 dependencies = [
-    "livekit-agents==1.5.4",
     "aiohttp>=3.9.0",
+    "livekit-agents>=1.0",
     "pydantic>=2.0",
-    "requests>=2.25.0",
 ]
 
 classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
     "Topic :: Multimedia :: Sound/Audio",
-    "Topic :: Multimedia :: Video",
-    "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3 :: Only",
 ]
-
-
 
 [build-system]
 requires = ["hatchling"]

@@ -4,40 +4,27 @@
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](https://opensource.org/licenses/Apache-2.0)
 
-腾讯云服务专用的 [LiveKit Agents](https://github.com/livekit/agents) 插件，提供语音识别集成解决方案。
+腾讯云服务专用的 [LiveKit Agents](https://github.com/livekit/agents) 插件，当前同时提供 STT 与 TTS 能力：
 
-## ✨ 特性
+- `STT`：实时语音识别（WebSocket）+ Flash 识别（HTTP）
+- `TTS`：流式文本语音合成（WebSocket `TextToStreamAudioWSv2`）
 
-- 🎤 **语音识别 (STT)** - 支持腾讯云语音识别服务
-- 🔒 **安全认证** - 支持腾讯云标准的密钥认证方式
-- 📦 **开箱即用** - 完整的 Python 包支持
+## 📋 能力概览
 
-## 📋 支持的服务
-
-| 服务 | 描述 | 文档链接 |
-|------|------|----------|
-| STT | 语音识别 | [腾讯云语音识别](https://cloud.tencent.com/document/product/1093/48982) |
+- STT 文档：[腾讯云语音识别](https://cloud.tencent.com/document/product/1093/48982)
+- TTS 文档：[腾讯云流式文本语音合成](https://cloud.tencent.com/document/api/1073/108595)
 
 ## 🛠️ 安装
 
-### 使用 pip 安装
-
 ```bash
-pip install livekit-plugins-tencent
+
+pip install -e . 
 ```
 
-### 从源码安装
+## ✅ 版本要求
 
-```bash
-git clone https://github.com/your-repo/livekit-plugins-volcengine.git
-cd livekit-plugins-volcengine
-pip install -e ./livekit-plugins/livekit-plugins-tencent
-```
-
-### 系统要求
-
-- Python >= 3.9
-- LiveKit Agents >= 1.2.9
+- Python >= 3.10
+- livekit-agents>=1.2.9
 
 ## ⚙️ 配置
 
@@ -47,147 +34,134 @@ pip install -e ./livekit-plugins/livekit-plugins-tencent
 
 | 环境变量 | 描述 | 获取方式 |
 |----------|------|----------|
-| `TENCENT_STT_APP_ID` | 腾讯云应用ID | [腾讯云控制台](https://console.cloud.tencent.com/) |
-| `TENCENT_STT_SECRET_KEY` | 腾讯云密钥 | [腾讯云控制台](https://console.cloud.tencent.com/) |
-| `TENCENT_STT_ID` | 腾讯云Secret ID | [腾讯云控制台](https://console.cloud.tencent.com/) |
+| `TENCENT_STT_APP_ID` | 腾讯云应用 ID | [腾讯云控制台](https://console.cloud.tencent.com/) |
+| `TENCENT_STT_SECRET_KEY` | 腾讯云 STT Secret Key | [腾讯云控制台](https://console.cloud.tencent.com/) |
+| `TENCENT_STT_SECRET_ID` | 腾讯云 STT Secret ID | [腾讯云控制台](https://console.cloud.tencent.com/) |
+| `TENCENT_TTS_APP_ID` | 腾讯云应用 ID | [腾讯云控制台](https://console.cloud.tencent.com/) |
+| `TENCENT_TTS_SECRET_KEY` | 腾讯云 TTS Secret Key | [腾讯云控制台](https://console.cloud.tencent.com/) |
+| `TENCENT_TTS_SECRET_ID` | 腾讯云 TTS Secret ID | [腾讯云控制台](https://console.cloud.tencent.com/) |
 
 ### .env 文件示例
 
 ```bash
-# .env
+# STT
 TENCENT_STT_APP_ID=your_app_id
 TENCENT_STT_SECRET_KEY=your_secret_key
-TENCENT_STT_ID=your_secret_id
+TENCENT_STT_SECRET_ID=your_secret_id
+
+# TTS
+TENCENT_TTS_APP_ID=your_app_id
+TENCENT_TTS_SECRET_KEY=your_secret_key
+TENCENT_TTS_SECRET_ID=your_secret_id
 ```
 
-## 📖 使用指南
+## 📖 快速开始
 
-### 基础使用
-
-```python
-from livekit.agents import Agent, AgentSession, JobContext, cli, WorkerOptions
-from livekit.plugins import tencent
-from dotenv import load_dotenv
-
-async def entry_point(ctx: JobContext):
-    agent = Agent(instructions="You are a helpful assistant.")
-
-    session = AgentSession(
-        # 语音识别 - 参数可从腾讯云控制台获取
-        stt=tencent.STT(
-            app_id="your_app_id",
-            secret_key="your_secret_key",
-            secret_id="your_secret_id"
-        )
-    )
-
-    await session.start(agent=agent, room=ctx.room)
-    await ctx.connect()
-
-if __name__ == "__main__":
-    load_dotenv()
-    cli.run_app(WorkerOptions(entrypoint_fnc=entry_point))
-```
-
-### 高级配置
+### STT（实时识别）
 
 ```python
 from livekit.plugins import tencent
 
-# 自定义STT配置
 stt = tencent.STT(
-    app_id="your_app_id",        # 应用ID
-    secret_key="your_secret_key", # 密钥
-    secret_id="your_secret_id",   # Secret ID
-    region="ap-beijing",         # 地域 (默认: ap-beijing)
-    engine_model_type="16k_zh",  # 引擎模型类型
-    voice_format="wav",          # 音频格式
-    filter_dirty=1,              # 是否过滤脏话 (0: 不过滤, 1: 过滤)
-    filter_modal=1,              # 是否过滤语气词 (0: 不过滤, 1: 过滤)
-    convert_num_mode=1           # 数字转换模式 (0: 不转换, 1: 转换为阿拉伯数字)
+    app_id=1234567890,
+    secret_id="your_secret_id",
+    secret_key="your_secret_key",
+    streaming=True,  # WebSocket 实时识别
 )
 ```
 
-## 🔧 API 参考
-
-### STT (语音识别)
+### STT（Flash/非流式识别）
 
 ```python
-tencent.STT(
-    app_id: str,                    # 应用ID
-    secret_key: str,                # 密钥
-    secret_id: str,                 # Secret ID
-    region: str = "ap-beijing",     # 地域
-    engine_model_type: str = "16k_zh",  # 引擎模型类型
-    voice_format: str = "wav",      # 音频格式
-    filter_dirty: int = 1,          # 是否过滤脏话
-    filter_modal: int = 1,          # 是否过滤语气词
-    convert_num_mode: int = 1       # 数字转换模式
+from livekit.plugins import tencent
+
+stt = tencent.STT(
+    app_id=1234567890,
+    secret_id="your_secret_id",
+    secret_key="your_secret_key",
+    streaming=False,  # recognize() 走 Flash HTTP 接口
 )
 ```
+
+### TTS（流式文本语音合成）
+
+```python
+from livekit.plugins import tencent
+
+tts = tencent.TTS(
+    app_id=1234567890,
+    secret_id="your_secret_id",
+    secret_key="your_secret_key",
+    voice_type=101001,
+    sample_rate=16000,
+    codec="pcm",  # "pcm" or "mp3"
+)
+```
+
+## 🔧 参数参考（按当前实现）
+
+### STT
+
+- `app_id` / `secret_id` / `secret_key`
+- `streaming`：默认 `True`，`False` 时使用 Flash HTTP
+- `interim_results`：默认 `True`
+- `noise_threshold`：默认 `0.5`，范围 `[-1, 1]`
+- `vad_silence_time`：默认 `500`，范围约 `240-2000ms`
+
+说明：当前实现默认使用 `engine_model_type="16k_zh"`，流式模式通过 WebSocket 输出 interim/final 事件。
+
+### TTS
+
+`TTS` 通过 WebSocket 接口 `TextToStreamAudioWSv2` 工作，常用参数：
+
+- `voice_type`：音色 ID，默认 `101001`
+- `codec`：`pcm` 或 `mp3`（默认 `pcm`）
+- `sample_rate`：`16000` 或 `8000`
+- `speed`：语速，范围 `[-2, 6]`
+- `volume`：音量，范围 `[-10, 10]`
+- `enable_subtitle`：是否开启时间戳字幕
+- `emotion_category` / `emotion_intensity`：多情感音色参数
+- `segment_rate`：断句敏感阈值（0/1/2）
+
+## 🔄 TTS 协议流程（官方文档对齐）
+
+插件实现遵循腾讯云官方流式文本语音合成接口流程：
+
+1. 握手成功后等待 `ready=1`
+2. 连续发送 `ACTION_SYNTHESIS`
+3. 文本发送结束后发送 `ACTION_COMPLETE`
+4. 收到 `final=1` 后结束会话
+
+详细协议与参数限制请参考腾讯云官方文档：
+[流式文本语音合成（TextToStreamAudioWSv2）](https://cloud.tencent.com/document/api/1073/108595)
+
+## 🔌 导出对象
+
+- `tencent.STT`
+- `tencent.TTS`
 
 ## ❓ 常见问题
 
 ### Q: 如何获取腾讯云的认证信息？
 
-A: 请访问[腾讯云控制台](https://console.cloud.tencent.com/)，创建语音识别应用并获取以下信息：
-- App ID: 应用ID
-- Secret Key: 密钥
-- Secret ID: Secret ID
+A: 请访问 [腾讯云控制台](https://console.cloud.tencent.com/) 创建对应服务并获取：
+- App ID
+- Secret ID
+- Secret Key
 
-### Q: 支持哪些音频格式？
+### Q: STT 和 TTS 的环境变量能混用吗？
 
-A: 支持多种音频格式，包括：
-- `wav` - WAV格式
-- `mp3` - MP3格式
-- `m4a` - M4A格式
-- 其他腾讯云支持的音频格式
+A: 建议分开配置。`STT` 读取 `TENCENT_STT_*`，`TTS` 读取 `TENCENT_TTS_*`，互不替代。
 
-### Q: 如何配置语音识别参数？
+### Q: TTS 为什么会“等一会儿”才返回音频？
 
-A: 可以通过以下参数优化识别效果：
-- `engine_model_type`: 选择合适的引擎模型 (16k_zh, 8k_zh等)
-- `filter_dirty`: 过滤敏感词汇
-- `filter_modal`: 过滤语气词
-- `convert_num_mode`: 数字转换设置
-
-### Q: 支持哪些地域？
-
-A: 支持腾讯云的各个地域，包括：
-- `ap-beijing` - 北京
-- `ap-shanghai` - 上海
-- `ap-guangzhou` - 广州
-- 其他腾讯云支持的地域
+A: 流式 TTS 会按句子进行缓存和合成。建议输入包含句末标点，并在文本结束时发送完成信号（插件内部会在结束时发送 `ACTION_COMPLETE`）。
 
 ## 📝 更新日志
 
-### v1.2.9
-- 支持腾讯云语音识别服务
-- 支持多种音频格式和地域
-- 完善的API文档和使用示例
+### v1.3.0
+- 支持腾讯云 STT（流式 + Flash）
 
-## 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
-1. Fork 本项目
-2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 打开 Pull Request
-
-## 📄 许可证
-
-本项目采用 Apache 2.0 许可证 - 查看 [LICENSE](../LICENSE) 文件了解详情。
-
-## 📞 联系我们
-
-- 项目主页: [GitHub](https://github.com/your-repo/livekit-plugins-volcengine)
-- 问题反馈: [Issues](https://github.com/your-repo/livekit-plugins-volcengine/issues)
-- 邮箱: 790990241@qq.com
-
-## 🙏 致谢
-
-- [LiveKit](https://github.com/livekit/agents) - 优秀的实时通信框架
-- [腾讯云](https://cloud.tencent.com/) - 强大的AI服务提供商
-
+### Unreleased
+- 新增腾讯云流式 TTS（`TextToStreamAudioWSv2`）支持
+- README 调整为 STT/TTS 并列覆盖并与当前实现对齐

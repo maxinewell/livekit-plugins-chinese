@@ -1,9 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import hashlib
-import hmac
 import json
 import os
 import time
@@ -28,7 +25,7 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import AudioBuffer, shortuuid
 
-from .common import Credential
+from .common import Credential, hmac_sha1_base64
 from . import asr
 
 from .log import logger
@@ -55,12 +52,8 @@ class STTOptions:
     def get_ws_url(self):
         params = self.get_params()
         url = self.base_url + str(self.app_id) + "?" + urlencode(params)
-        hmacstr = hmac.new(
-            self.secret_key.encode("utf-8"), url[6:].encode("utf-8"), hashlib.sha1
-        ).digest()
-        s = base64.b64encode(hmacstr)
-        s = s.decode("utf-8")
-        urlencoded_s = urlencode({"signature": s})
+        signature = hmac_sha1_base64(self.secret_key, url[6:])
+        urlencoded_s = urlencode({"signature": signature})
         return url + "&" + urlencoded_s
 
     def get_http_url(self):
@@ -69,11 +62,7 @@ class STTOptions:
         return url
 
     def get_signature(self, url: str) -> str:
-        hmacstr = hmac.new(
-            self.secret_key.encode("utf-8"), url[8:].encode("utf-8"), hashlib.sha1
-        ).digest()
-        s = base64.b64encode(hmacstr)
-        return s.decode("utf-8")
+        return hmac_sha1_base64(self.secret_key, url[8:])
 
     def get_params(self):
         params = {
