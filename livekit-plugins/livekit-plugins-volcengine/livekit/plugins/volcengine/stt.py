@@ -199,6 +199,7 @@ class STT(stt.STT):
         force_to_speech_time: int = 1000,
         http_session: aiohttp.ClientSession | None = None,
         interim_results: bool = True,
+        language: str = "zh-CN",
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -218,6 +219,7 @@ class STT(stt.STT):
             vad_segment_duration=vad_segment_duration,
             end_window_size=end_window_size,
             force_to_speech_time=force_to_speech_time,
+            language=language,
         )
 
         self._session = http_session
