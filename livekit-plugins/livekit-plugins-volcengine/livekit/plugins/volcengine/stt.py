@@ -13,8 +13,10 @@ import aiohttp
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
     APIConnectOptions,
     APIStatusError,
+    APITimeoutError,
     stt,
     utils,
 )
@@ -279,6 +281,15 @@ class SpeechStream(stt.SpeechStream):
         closing_ws = False
 
         @utils.log_exceptions(logger=logger)
+        async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            try:
+                while True:
+                    await asyncio.sleep(10)
+                    await ws.ping()
+            except Exception:
+                return
+
+        @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse):
             nonlocal closing_ws
 
@@ -308,6 +319,7 @@ class SpeechStream(stt.SpeechStream):
                         frame.data.tobytes(), seq=seq, last=has_ended
                     )
                     await ws.send_bytes(chunk_request)
+            closing_ws = True
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse):
@@ -319,9 +331,13 @@ class SpeechStream(stt.SpeechStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing_ws:
+                    if closing_ws or self._session.closed:
                         return
-                    raise APIStatusError(message="connection closed unexpectedly")
+                    raise APIStatusError(
+                        message="Volcengine STT connection closed unexpectedly",
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
+                    )
 
                 try:
                     self._process_stream_event(msg.data)
@@ -336,11 +352,13 @@ class SpeechStream(stt.SpeechStream):
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
+                    asyncio.create_task(keepalive_task(ws)),
                 ]
+                tasks_group = asyncio.gather(*tasks)
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
                 try:
                     done, _ = await asyncio.wait(
-                        [asyncio.gather(*tasks), wait_reconnect_task],
+                        (tasks_group, wait_reconnect_task),
                         return_when=asyncio.FIRST_COMPLETED,
                     )
 
@@ -354,23 +372,57 @@ class SpeechStream(stt.SpeechStream):
                     self._reconnect_event.clear()
                 finally:
                     await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
+                    tasks_group.cancel()
+                    tasks_group.exception()
             finally:
                 if ws is not None:
                     await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        ws = await asyncio.wait_for(
-            self._session.ws_connect(
-                self._opts.get_ws_url(),
-                headers=self._opts.get_ws_header(reqid=self._request_id),
-                max_msg_size=1000000000,
-            ),
-            self._conn_options.timeout,
-        )
+        try:
+            ws = await asyncio.wait_for(
+                self._session.ws_connect(
+                    self._opts.get_ws_url(),
+                    headers=self._opts.get_ws_header(reqid=self._request_id),
+                    max_msg_size=1000000000,
+                ),
+                self._conn_options.timeout,
+            )
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError() from e
+        except aiohttp.ClientError as e:
+            raise APIConnectionError("Failed to connect to Volcengine") from e
         return ws
 
     def _process_stream_event(self, data: dict) -> None:
-        results = parse_response(res=data)["payload_msg"]
+        parsed = parse_response(res=data)
+        if "code" in parsed:
+            if self._speaking:
+                self._event_ch.send_nowait(
+                    stt.SpeechEvent(
+                        type=stt.SpeechEventType.END_OF_SPEECH,
+                        request_id=self._request_id,
+                    )
+                )
+                self._speaking = False
+            logger.error(
+                "volcengine stt server error",
+                extra={
+                    "request_id": self._request_id,
+                    "code": parsed.get("code"),
+                    "payload_msg": parsed.get("payload_msg"),
+                    "payload_size": parsed.get("payload_size"),
+                },
+            )
+            # Some server error responses end the STT session without closing websocket.
+            # Force a reconnect so the stream can continue with a fresh session.
+            self._request_id = utils.shortuuid()
+            self._reconnect_event.set()
+            return
+
+        results = parsed.get("payload_msg")
+        if results is None:
+            return
         result = results.get("result", None)
         if result is None:
             return
