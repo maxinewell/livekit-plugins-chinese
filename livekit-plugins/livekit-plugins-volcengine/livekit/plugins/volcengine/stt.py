@@ -101,6 +101,37 @@ class STTOptions:
     end_window_size: int = 500
     force_to_speech_time: int = 1000
 
+    # 热词 / 语料干预，见 request.corpus
+    # https://www.volcengine.com/docs/6561/1354869?lang=zh
+    boosting_table_id: str | None = None
+    boosting_table_name: str | None = None
+    correct_table_id: str | None = None
+    correct_table_name: str | None = None
+    hotwords: list[str] | None = None
+    corpus_context: str | None = None
+
+    def _build_corpus(self) -> dict | None:
+        corpus: dict[str, str] = {}
+        if self.boosting_table_id is not None:
+            corpus["boosting_table_id"] = self.boosting_table_id
+        if self.boosting_table_name is not None:
+            corpus["boosting_table_name"] = self.boosting_table_name
+        if self.correct_table_id is not None:
+            corpus["correct_table_id"] = self.correct_table_id
+        if self.correct_table_name is not None:
+            corpus["correct_table_name"] = self.correct_table_name
+
+        context = self.corpus_context
+        if context is None and self.hotwords:
+            context = json.dumps(
+                {"hotwords": [{"word": w} for w in self.hotwords]},
+                ensure_ascii=False,
+            )
+        if context is not None:
+            corpus["context"] = context
+
+        return corpus or None
+
     def get_ws_url(self):
         return self.base_url
 
@@ -128,6 +159,9 @@ class STTOptions:
                 "force_to_speech_time": self.force_to_speech_time,
             },
         }
+        corpus = self._build_corpus()
+        if corpus is not None:
+            submit_request_json["request"]["corpus"] = corpus
         payload_bytes = gzip.compress(str.encode(json.dumps(submit_request_json)))
         full_client_request = bytearray(
             generate_header(message_type_specific_flags=POS_SEQUENCE)
@@ -199,6 +233,12 @@ class STT(stt.STT):
         vad_segment_duration: int = 3000,
         end_window_size: int = 500,
         force_to_speech_time: int = 1000,
+        boosting_table_id: str | None = None,
+        boosting_table_name: str | None = None,
+        correct_table_id: str | None = None,
+        correct_table_name: str | None = None,
+        hotwords: list[str] | None = None,
+        corpus_context: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
         interim_results: bool = True,
         language: str = "zh-CN",
@@ -222,6 +262,12 @@ class STT(stt.STT):
             end_window_size=end_window_size,
             force_to_speech_time=force_to_speech_time,
             language=language,
+            boosting_table_id=boosting_table_id,
+            boosting_table_name=boosting_table_name,
+            correct_table_id=correct_table_id,
+            correct_table_name=correct_table_name,
+            hotwords=hotwords,
+            corpus_context=corpus_context,
         )
 
         self._session = http_session
