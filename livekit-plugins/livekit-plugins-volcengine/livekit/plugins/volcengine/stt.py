@@ -6,7 +6,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 import aiohttp
 
@@ -443,6 +443,9 @@ class SpeechStream(stt.SpeechStream):
     def _process_stream_event(self, data: dict) -> None:
         parsed = parse_response(res=data)
         if "code" in parsed:
+            code = int(parsed["code"])
+            payload_msg = parsed.get("payload_msg")
+            error_message = format_stt_server_error(code, payload_msg)
             if self._speaking:
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(
@@ -452,11 +455,11 @@ class SpeechStream(stt.SpeechStream):
                 )
                 self._speaking = False
             logger.error(
-                "volcengine stt server error",
+                error_message,
                 extra={
                     "request_id": self._request_id,
-                    "code": parsed.get("code"),
-                    "payload_msg": parsed.get("payload_msg"),
+                    "code": code,
+                    "payload_msg": payload_msg,
                     "payload_size": parsed.get("payload_size"),
                 },
             )
@@ -548,6 +551,70 @@ class SpeechStream(stt.SpeechStream):
             )
             self._speaking = False
             logger.info("transcription end", extra={"text": text})
+
+
+# Volcengine STT error codes:
+# v2 https://www.volcengine.com/docs/6561/80818#_3-3-错误码
+# v3 https://www.volcengine.com/docs/6561/1354869
+_STT_ERROR_CODES: dict[int, tuple[str, str]] = {
+    1000: ("通用错误", ""),
+    1001: ("请求参数无效", "请求参数缺失必需字段 / 字段值无效 / 重复请求。"),
+    1002: ("无访问权限", ""),
+    1003: ("访问超频", "超出设定阈值。"),
+    1004: ("访问超额", ""),
+    1005: ("服务器过载", "当前无法处理请求，请稍后重试。"),
+    1010: ("音频过长", "音频数据时长超出阈值。"),
+    1011: ("音频过大", "音频数据大小超出阈值。"),
+    1012: ("音频格式无效", "音频 header 有误 / 无法进行音频解码。"),
+    1013: ("音频静音", "音频未识别出任何文本结果。"),
+    1020: ("识别等待超时", "下一包就绪超时。"),
+    1021: ("识别处理超时", "识别过程超时。"),
+    1022: ("识别错误", "识别过程中发生错误。"),
+    1099: ("未知服务端错误", "服务侧未定义的内部处理错误。"),
+    20000000: ("成功", ""),
+    45000001: ("请求参数无效", "请求参数缺失必需字段 / 字段值无效 / 重复请求。"),
+    45000002: ("空音频", ""),
+    45000003: ("静音音频异常", "超过 10 分钟没有对话交互，服务端释放连接。"),
+    45000081: ("等包超时", "等待下一音频包超时。"),
+    45000151: ("音频格式不正确", ""),
+    55000031: ("服务器繁忙", "服务过载，无法处理当前请求。"),
+}
+
+
+def lookup_stt_error(code: int) -> tuple[str, str]:
+    if code in _STT_ERROR_CODES:
+        return _STT_ERROR_CODES[code]
+    if 1008 <= code <= 1009 or 1014 <= code <= 1019 or 1023 <= code <= 1039:
+        return ("保留号段", "")
+    if 55000000 <= code < 56000000:
+        return ("服务内部处理错误", "")
+    if 45000000 <= code < 46000000:
+        return ("客户端错误", "")
+    return ("未知错误", "")
+
+
+def _extract_payload_message(payload_msg: Any) -> str | None:
+    if payload_msg is None:
+        return None
+    if isinstance(payload_msg, dict):
+        for key in ("message", "error", "msg", "detail"):
+            value = payload_msg.get(key)
+            if value:
+                return str(value)
+    if isinstance(payload_msg, str) and payload_msg.strip():
+        return payload_msg.strip()
+    return None
+
+
+def format_stt_server_error(code: int, payload_msg: Any = None) -> str:
+    meaning, description = lookup_stt_error(code)
+    parts = [f"volcengine stt server error [{code}] {meaning}"]
+    if description:
+        parts.append(description)
+    server_msg = _extract_payload_message(payload_msg)
+    if server_msg:
+        parts.append(f"server: {server_msg}")
+    return ": ".join(parts) if len(parts) > 1 else parts[0]
 
 
 def parse_response(res):
