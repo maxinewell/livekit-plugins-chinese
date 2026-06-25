@@ -16,6 +16,9 @@ dependencies = [
     "livekit-agents==1.5.4",
 ]
 
+[project.optional-dependencies]
+sentry = ["sentry-sdk>=2.35.0"]
+
 classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",

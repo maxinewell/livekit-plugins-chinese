@@ -6,6 +6,8 @@ from typing import Any
 
 import httpx
 import openai
+import sentry_sdk
+from sentry_sdk.integrations.openai import OpenAIIntegration
 from openai.types.chat import ChatCompletionChunk, ChatCompletionToolChoiceOptionParam
 from openai.types.chat.chat_completion_chunk import Choice
 
@@ -22,6 +24,16 @@ from livekit.agents.utils import is_given
 
 from .log import logger
 from .utils import to_chat_ctx, to_fnc_ctx
+
+if os.getenv("SENTRY_DSN"):
+    sentry_sdk.init(
+        dsn=os.getenv("SENTRY_DSN"),
+        traces_sample_rate=0.0,
+        send_default_pii=True,
+        stream_gen_ai_spans=True,
+        integrations=[OpenAIIntegration(include_prompts=False)],
+        environment=os.getenv("LANGFUSE_TRACING_ENVIRONMENT", "unknown"),
+    )
 
 
 @dataclass
