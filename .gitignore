@@ -182,3 +182,8 @@ test.py
 config.yaml
 uv.lock
 scripts/
+tools/
+superpowers/
+
+# Local TTS voice sample library (generated audio)
+tts_samples/

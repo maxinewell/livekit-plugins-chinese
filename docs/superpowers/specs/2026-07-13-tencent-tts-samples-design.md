@@ -34,7 +34,7 @@ tts_samples/tencent/                    # gitignored
   catalog.json
   errors.json
   voices/
-    {code}_{name}/
+    {name}/
       zh.mp3
       en.mp3
       meta.json
@@ -44,7 +44,7 @@ tools/
   tencent_tts_voices.json               # 可入库：完整音色清单
 ```
 
-说明：仓库根 `.gitignore` 已忽略整个 `scripts/`，因此生成工具放在 `tools/`，避免无法提交。
+说明：仓库根 `.gitignore` 已忽略整个 `scripts/`，因此生成工具放在 `tools/`，避免无法提交。音色目录名为展示名 `name`（`/` 等不安全字符替换为 `-`）。
 
 ## 数据模型
 
@@ -74,8 +74,8 @@ tools/
   "code": 101001,
   "gender": "female",
   "tags": ["情感", "精品音色", "中文"],
-  "zh_audio": "voices/101001_智瑜/zh.mp3",
-  "en_audio": "voices/101001_智瑜/en.mp3",
+  "zh_audio": "voices/智瑜/zh.mp3",
+  "en_audio": "voices/智瑜/en.mp3",
   "sample_rate": 16000,
   "supported_languages": ["zh", "en"]
 }
