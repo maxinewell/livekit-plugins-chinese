@@ -6,6 +6,7 @@ from livekit.agents import APIStatusError
 from livekit.plugins.volcengine.tts import (
     TTS,
     _TTSOptions,
+    infer_resource_id,
     parse_http_stream_event,
     parse_response,
 )
@@ -65,7 +66,7 @@ def test_volcengine_tts_http_header_uses_v3_auth() -> None:
     headers = _TTSOptions(
         app_id="app",
         access_token="token",
-        resource_id="seed-tts-2.0",
+        voice="zh_female_xiaohe_uranus_bigtts",
     ).get_http_header(reqid="request-id")
 
     assert headers["X-Api-App-Key"] == "app"
@@ -100,6 +101,32 @@ def test_volcengine_tts_defaults_to_test_resource() -> None:
     headers = _TTSOptions(app_id="app", access_token="token").get_http_header()
 
     assert headers["X-Api-Resource-Id"] == "seed-tts-2.0"
+
+
+@pytest.mark.parametrize(
+    ("voice", "resource_id"),
+    [
+        ("zh_female_xiaohe_uranus_bigtts", "seed-tts-2.0"),
+        ("zh_female_qingxinnvsheng_mars_bigtts", "seed-tts-1.0"),
+        ("zh_female_shuangkuaisisi_moon_bigtts", "seed-tts-1.0"),
+        ("zh_female_gaolengyujie_emo_v2_mars_bigtts", "seed-tts-1.0"),
+        ("S_my_clone_voice", "seed-icl-2.0"),
+        ("custom_mix_bigtts", "seed-tts-1.0"),
+        ("saturn_zh_female_tob", "seed-tts-2.0"),
+    ],
+)
+def test_infer_resource_id(voice: str, resource_id: str) -> None:
+    assert infer_resource_id(voice) == resource_id
+
+
+def test_volcengine_tts_infers_resource_id_from_voice() -> None:
+    headers = _TTSOptions(
+        app_id="app",
+        access_token="token",
+        voice="zh_female_qingxinnvsheng_mars_bigtts",
+    ).get_http_header()
+
+    assert headers["X-Api-Resource-Id"] == "seed-tts-1.0"
 
 
 def test_volcengine_tts_parses_v3_audio_chunk() -> None:

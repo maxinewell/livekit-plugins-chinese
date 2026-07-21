@@ -24,10 +24,30 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from .log import logger
 
 
+def infer_resource_id(voice: str) -> str:
+    if voice.startswith("S_"):
+        return "seed-icl-2.0"
+    if voice == "custom_mix_bigtts":
+        return "seed-tts-1.0"
+    if voice.startswith("ICL_") and voice.endswith("_tob"):
+        return "seed-tts-1.0"
+    if voice.startswith("saturn_") and voice.endswith("_tob"):
+        return "seed-tts-2.0"
+    if voice.endswith("_uranus_bigtts"):
+        return "seed-tts-2.0"
+    if (
+        voice.endswith("_mars_bigtts")
+        or voice.endswith("_moon_bigtts")
+        or voice.endswith("_emo_v2_mars_bigtts")
+        or voice.endswith("_conversation_wvae_bigtts")
+    ):
+        return "seed-tts-1.0"
+    return "seed-tts-2.0"
+
+
 class _TTSOptions(BaseModel):
     app_id: str
     access_token: str | None = None
-    resource_id: str | None = None
     voice: str = "zh_female_xiaohe_uranus_bigtts"
     base_url: str = "https://openspeech.bytedance.com"
     sample_rate: Literal[24000, 16000, 8000] = 24000
@@ -64,9 +84,7 @@ class _TTSOptions(BaseModel):
             self.access_token = os.getenv("VOLCENGINE_TTS_ACCESS_TOKEN")
             if self.access_token is None:
                 raise ValueError("VOLCENGINE_TTS_ACCESS_TOKEN is not set")
-        resource_id = self.resource_id or os.getenv(
-            "VOLCENGINE_TTS_RESOURCE_ID", "seed-tts-2.0"
-        )
+        resource_id = infer_resource_id(self.voice)
         headers = {
             "Content-Type": "application/json",
             "X-Api-App-Id": self.app_id,
@@ -84,7 +102,6 @@ class TTS(tts.TTS):
         self,
         app_id: str,
         access_token: str | None = None,
-        resource_id: str | None = None,
         voice: str = "zh_female_xiaohe_uranus_bigtts",
         speed: float = 1.0,
         volume: float = 1.0,
@@ -97,8 +114,7 @@ class TTS(tts.TTS):
         Args:
             app_id (str): the app id of the tts, you can get it from the console.
             access_token (str | None, optional): the access token of the tts, if not provided, the value of the environment variable VOLCENGINE_TTS_ACCESS_TOKEN will be used. Defaults to None.
-            resource_id (str | None, optional): VolcEngine TTS resource id. Use `seed-tts-2.0` for Doubao TTS 2.0 voices, `seed-tts-1.0` / `seed-tts-1.0-concurr` for Doubao TTS 1.0 voices, `seed-icl-2.0` for voice cloning 2.0, and `seed-icl-1.0` / `seed-icl-1.0-concurr` for voice cloning 1.0. Defaults to None.
-            voice (str, optional): the voice id used by the tts request. Defaults to `zh_female_xiaohe_uranus_bigtts`.
+            voice (str, optional): the voice id used by the tts request. `resource_id` is inferred automatically from the voice (e.g. `*_uranus_bigtts` -> `seed-tts-2.0`, `*_mars_bigtts` -> `seed-tts-1.0`, `S_*` -> `seed-icl-2.0`). Defaults to `zh_female_xiaohe_uranus_bigtts`.
             sample_rate (Literal[24000, 16000, 8000], optional): the sample rate of the tts. Defaults to 24000.
             streaming (bool, optional): whether to use the streaming api. Defaults to True.
             http_session (aiohttp.ClientSession | None, optional): the http session to use. Defaults to None.
@@ -111,7 +127,6 @@ class TTS(tts.TTS):
         self._opts = _TTSOptions(
             app_id=app_id,
             access_token=access_token,
-            resource_id=resource_id,
             voice=voice,
             sample_rate=sample_rate,
             speed=speed,

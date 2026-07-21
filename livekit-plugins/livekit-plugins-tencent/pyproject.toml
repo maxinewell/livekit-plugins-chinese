@@ -5,7 +5,7 @@ description = "LiveKit Agent Plugins for Tencent"
 readme = "README.md"
 authors = [
     { name = "wangmengdi", email = "790990241@qq.com" },
-    { name = "maxinewell"}
+    { name = "maxinewell" }
 ]
 keywords = ["webrtc", "realtime", "audio", "livekit", "tencent", "stt", "tts"]
 requires-python = ">=3.10"

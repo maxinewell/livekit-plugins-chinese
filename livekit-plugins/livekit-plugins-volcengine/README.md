@@ -12,7 +12,7 @@
 - Python 要求已更新为 `>=3.10`
 - `volcengine.TTS` 已切换到豆包语音合成大模型 V3 HTTP Chunked 接口
 - `volcengine.TTS` 不再需要 `cluster` 参数
-- `volcengine.TTS` 默认 `resource_id="seed-tts-2.0"`
+- `volcengine.TTS` 会根据 `voice` 自动推断 `resource_id`（如 `*_uranus_bigtts` → `seed-tts-2.0`，`*_mars_bigtts` → `seed-tts-1.0`）
 - `volcengine.TTS` 默认音色为 `zh_female_xiaohe_uranus_bigtts`
 - `volcengine.STT` 现已直接使用豆包大模型流式语音识别接口
 - `volcengine.STT` 已补齐新版握手头 `X-Api-Connect-Id`
@@ -77,7 +77,6 @@ pip install -e .
 | `VOLCENGINE_STT_ACCESS_TOKEN` | STT 服务的访问令牌 | [语音识别控制台](https://console.volcengine.com/speech/service/16) |
 | `VOLCENGINE_LLM_API_KEY` | LLM 服务的 API 密钥 | [大模型控制台](https://console.volcengine.com/ark/) |
 | `VOLCENGINE_REALTIME_ACCESS_TOKEN` | 实时服务的访问令牌 | [实时语音控制台](https://console.volcengine.com/speech/service/10011) |
-| `VOLCENGINE_TTS_RESOURCE_ID` | TTS 资源 ID，默认 `seed-tts-2.0` | [豆包语音合成接口文档](https://www.volcengine.com/docs/6561/1257584) |
 
 ### .env 文件示例
 
@@ -350,7 +349,6 @@ async def entry_point(ctx: JobContext):
         # 语音合成
         tts=volcengine.TTS(
             app_id="your_tts_app_id",
-            resource_id="seed-tts-2.0",
             voice="zh_female_xiaohe_uranus_bigtts"
         ),
         # 单独的LLM (非实时)
@@ -375,8 +373,7 @@ if __name__ == "__main__":
 volcengine.TTS(
     app_id: str,           # 应用ID
     access_token: str | None = None,    # 访问令牌，可用环境变量
-    resource_id: str | None = None,     # 默认 seed-tts-2.0
-    voice: str = "zh_female_xiaohe_uranus_bigtts",
+    voice: str = "zh_female_xiaohe_uranus_bigtts",  # resource_id 会根据 voice 自动推断
     speed: float = 1.0,
     volume: float = 1.0,
     pitch: float = 1.0,
@@ -391,7 +388,7 @@ volcengine.TTS(
 - `seed-icl-2.0`：豆包声音复刻模型 2.0
 - `seed-icl-1.0` / `seed-icl-1.0-concurr`：豆包声音复刻模型 1.0
 
-`seed-tts-*` 只能调用语音合成音色，`seed-icl-*` 只能调用声音复刻音色。`resource_id` 和音色版本必须匹配。
+`seed-tts-*` 只能调用语音合成音色，`seed-icl-*` 只能调用声音复刻音色。插件会根据音色 ID 后缀自动选择匹配的 `resource_id`。
 
 ### STT (语音识别)
 
