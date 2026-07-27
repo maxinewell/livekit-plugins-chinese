@@ -1,12 +1,19 @@
 import base64
+import gzip
+import json
 
 import pytest
 
 from livekit.agents import APIStatusError
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.plugins.volcengine.tts import (
+    SynthesizeStream,
     TTS,
     _TTSOptions,
+    ConcurrentQuotaExceededError,
+    infer_fallback_voice,
     infer_resource_id,
+    is_concurrency_quota_error,
     parse_http_stream_event,
     parse_response,
 )
@@ -153,3 +160,145 @@ def test_volcengine_tts_parses_v3_done_chunk() -> None:
 def test_volcengine_tts_raises_on_v3_stream_error() -> None:
     with pytest.raises(APIStatusError, match="voice not found"):
         parse_http_stream_event(b'{"code":3050,"message":"voice not found"}\n')
+
+
+@pytest.mark.parametrize(
+    ("voice", "fallback"),
+    [
+        ("zh_female_qingxinnvsheng_mars_bigtts", "BV001_streaming"),
+        ("zh_female_xiaohe_uranus_bigtts", "BV001_streaming"),
+        ("zh_male_m191_uranus_bigtts", "BV002_streaming"),
+        ("zh_male_taocheng_uranus_bigtts", "BV002_streaming"),
+    ],
+)
+def test_infer_fallback_voice(voice: str, fallback: str) -> None:
+    assert infer_fallback_voice(voice) == fallback
+
+
+def test_infer_fallback_voice_rejects_unknown_gender() -> None:
+    with pytest.raises(ValueError, match="gender"):
+        infer_fallback_voice("S_custom_clone_voice")
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("quota exceeded for types: concurrency", True),
+        ("Quota Exceeded for types: Concurrency", True),
+        ("resource ID is mismatched with speaker related resource", False),
+        ("permission denied", False),
+        ("quota exceeded for types: qps", False),
+    ],
+)
+def test_is_concurrency_quota_error(message: str, expected: bool) -> None:
+    assert is_concurrency_quota_error(message) is expected
+
+
+def test_parse_http_stream_event_raises_concurrency_error() -> None:
+    line = b'{"code":45000000,"message":"quota exceeded for types: concurrency"}\n'
+    with pytest.raises(ConcurrentQuotaExceededError, match="quota exceeded"):
+        parse_http_stream_event(line)
+
+
+def test_parse_http_stream_event_non_concurrency_stays_api_status() -> None:
+    line = b'{"code":55000000,"message":"resource ID is mismatched with speaker related resource"}\n'
+    with pytest.raises(APIStatusError) as exc_info:
+        parse_http_stream_event(line)
+    assert not isinstance(exc_info.value, ConcurrentQuotaExceededError)
+
+
+def test_small_tts_ws_url() -> None:
+    opts = _TTSOptions(app_id="app", access_token="token")
+    assert opts.get_ws_url() == "wss://openspeech.bytedance.com/api/v1/tts/ws_binary"
+
+
+def test_small_tts_ws_header() -> None:
+    headers = _TTSOptions(app_id="app", access_token="token").get_ws_header()
+    assert headers["Authorization"] == "Bearer;token"
+
+
+def test_small_tts_ws_payload_uses_fallback_voice_and_cluster() -> None:
+    opts = _TTSOptions(app_id="app", access_token="token", sample_rate=16000)
+    frame = opts.get_ws_query_params(
+        "hello", voice="BV001_streaming", uid="user-id"
+    )
+    assert frame[:4] == b"\x11\x10\x11\x00"
+    payload_size = int.from_bytes(frame[4:8], "big")
+    payload = gzip.decompress(frame[8 : 8 + payload_size])
+    body = json.loads(payload)
+    assert body["app"]["cluster"] == "volcano_tts"
+    assert body["app"]["appid"] == "app"
+    assert body["audio"]["voice_type"] == "BV001_streaming"
+    assert body["audio"]["encoding"] == "pcm"
+    assert body["audio"]["rate"] == 16000
+    assert body["request"]["operation"] == "submit"
+    assert body["request"]["text"] == "hello"
+
+
+@pytest.mark.asyncio
+async def test_tts_falls_back_and_retries_on_concurrency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tts = TTS(
+        app_id="app",
+        access_token="token",
+        voice="zh_female_xiaohe_uranus_bigtts",
+    )
+    calls: list[str] = []
+
+    async def fake_big(self, sentence: str, emitter) -> None:
+        calls.append(f"big:{sentence}")
+        raise ConcurrentQuotaExceededError(
+            message="volcengine tts server error: quota exceeded for types: concurrency"
+        )
+
+    async def fake_small(self, sentence: str, emitter) -> None:
+        calls.append(f"small:{sentence}")
+
+    monkeypatch.setattr(SynthesizeStream, "_synthesize_big", fake_big)
+    monkeypatch.setattr(SynthesizeStream, "_synthesize_small", fake_small)
+
+    stream = SynthesizeStream(
+        tts=tts,
+        conn_options=DEFAULT_API_CONNECT_OPTIONS,
+        opts=tts._opts,
+        session=object(),
+    )
+    await stream._synthesize_sentence("你好", emitter=object())
+    await stream.aclose()
+
+    assert tts._use_small_tts is True
+    assert calls == ["big:你好", "small:你好"]
+
+
+@pytest.mark.asyncio
+async def test_tts_sticky_skips_big_model_after_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tts = TTS(
+        app_id="app",
+        access_token="token",
+        voice="zh_male_m191_uranus_bigtts",
+    )
+    tts._use_small_tts = True
+    calls: list[str] = []
+
+    async def fake_big(self, sentence: str, emitter) -> None:
+        calls.append("big")
+
+    async def fake_small(self, sentence: str, emitter) -> None:
+        calls.append(f"small:{sentence}")
+
+    monkeypatch.setattr(SynthesizeStream, "_synthesize_big", fake_big)
+    monkeypatch.setattr(SynthesizeStream, "_synthesize_small", fake_small)
+
+    stream = SynthesizeStream(
+        tts=tts,
+        conn_options=DEFAULT_API_CONNECT_OPTIONS,
+        opts=tts._opts,
+        session=object(),
+    )
+    await stream._synthesize_sentence("第二句", emitter=object())
+    await stream.aclose()
+
+    assert calls == ["small:第二句"]

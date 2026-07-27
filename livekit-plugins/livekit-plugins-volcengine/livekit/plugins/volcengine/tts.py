@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import gzip
 import json
@@ -43,6 +44,29 @@ def infer_resource_id(voice: str) -> str:
     ):
         return "seed-tts-1.0"
     return "seed-tts-2.0"
+
+
+SMALL_TTS_CLUSTER = "volcano_tts"
+SMALL_TTS_WS_BASE_URL = "wss://openspeech.bytedance.com/api/v1"
+
+
+def infer_fallback_voice(voice: str) -> str:
+    parts = set(voice.lower().split("_"))
+    if "female" in parts:
+        return "BV001_streaming"
+    if "male" in parts:
+        return "BV002_streaming"
+    raise ValueError(f"cannot infer gender from voice: {voice}")
+
+
+def is_concurrency_quota_error(message: str) -> bool:
+    lower = message.lower()
+    return "quota exceeded" in lower and "concurrency" in lower
+
+
+class ConcurrentQuotaExceededError(APIStatusError):
+    def __init__(self, message: str) -> None:
+        super().__init__(message=message)
 
 
 class _TTSOptions(BaseModel):
@@ -96,6 +120,56 @@ class _TTSOptions(BaseModel):
             headers["X-Api-Request-Id"] = reqid
         return headers
 
+    def get_ws_url(self) -> str:
+        return f"{SMALL_TTS_WS_BASE_URL}/tts/ws_binary"
+
+    def get_ws_header(self) -> dict[str, str]:
+        if self.access_token is None:
+            self.access_token = os.getenv("VOLCENGINE_TTS_ACCESS_TOKEN")
+            if self.access_token is None:
+                raise ValueError("VOLCENGINE_TTS_ACCESS_TOKEN is not set")
+        return {"Authorization": f"Bearer;{self.access_token}"}
+
+    def get_ws_query_params(
+        self, text: str, *, voice: str, uid: str | None = None
+    ) -> bytearray:
+        if uid is None:
+            uid = utils.shortuuid()
+        if self.access_token is None:
+            self.access_token = os.getenv("VOLCENGINE_TTS_ACCESS_TOKEN")
+            if self.access_token is None:
+                raise ValueError("VOLCENGINE_TTS_ACCESS_TOKEN is not set")
+        submit_request_json = {
+            "app": {
+                "appid": self.app_id,
+                "token": self.access_token,
+                "cluster": SMALL_TTS_CLUSTER,
+            },
+            "user": {"uid": uid},
+            "audio": {
+                "voice_type": voice,
+                "encoding": self.encoding,
+                "speed_ratio": self.speed,
+                "volume_ratio": self.volume,
+                "pitch_ratio": self.pitch,
+                "rate": self.sample_rate,
+            },
+            "request": {
+                "reqid": utils.shortuuid(),
+                "text": text,
+                "text_type": "plain",
+                "operation": "submit",
+                "with_frontend": 1,
+                "frontend_type": "unitTson",
+            },
+        }
+        default_header = bytearray(b"\x11\x10\x11\x00")
+        payload_bytes = gzip.compress(json.dumps(submit_request_json).encode())
+        full_client_request = bytearray(default_header)
+        full_client_request.extend(len(payload_bytes).to_bytes(4, "big"))
+        full_client_request.extend(payload_bytes)
+        return full_client_request
+
 
 class TTS(tts.TTS):
     def __init__(
@@ -135,11 +209,46 @@ class TTS(tts.TTS):
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
+        self._use_small_tts = False
+        self._small_pool: (
+            utils.ConnectionPool[aiohttp.ClientWebSocketResponse] | None
+        ) = None
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if self._session is None:
             self._session = utils.http_context.http_session()
         return self._session
+
+    def _ensure_small_pool(
+        self,
+    ) -> utils.ConnectionPool[aiohttp.ClientWebSocketResponse]:
+        if self._small_pool is None:
+            self._small_pool = utils.ConnectionPool[
+                aiohttp.ClientWebSocketResponse
+            ](
+                connect_cb=self._connect_small_ws,
+                close_cb=self._close_small_ws,
+                max_session_duration=30,
+                mark_refreshed_on_get=False,
+            )
+        return self._small_pool
+
+    async def _connect_small_ws(
+        self, timeout: float
+    ) -> aiohttp.ClientWebSocketResponse:
+        session = self._ensure_session()
+        return await asyncio.wait_for(
+            session.ws_connect(
+                self._opts.get_ws_url(),
+                headers=self._opts.get_ws_header(),
+            ),
+            timeout=timeout,
+        )
+
+    async def _close_small_ws(
+        self, ws: aiohttp.ClientWebSocketResponse
+    ) -> None:
+        await ws.close()
 
     def synthesize(
         self, text, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -161,6 +270,9 @@ class TTS(tts.TTS):
             await stream.aclose()
 
         self._streams.clear()
+        if self._small_pool is not None:
+            await self._small_pool.aclose()
+            self._small_pool = None
 
 
 class SynthesizeStream(tts.SynthesizeStream):
@@ -207,52 +319,128 @@ class SynthesizeStream(tts.SynthesizeStream):
                     )
                 logger.info("tts start", extra={"sentence": sentence})
                 emitter.start_segment(segment_id=utils.shortuuid())
-                reqid = utils.shortuuid()
-                payload = self._opts.get_http_request(
-                    sentence, reqid=reqid, uid=utils.shortuuid()
-                )
-                headers = self._opts.get_http_header(reqid=reqid)
-                first_response = True
-                start_time = time.perf_counter()
-                async with self._session.post(
-                    self._opts.get_http_url(),
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(
-                        total=300,
-                        sock_connect=self._conn_options.timeout,
-                    ),
-                    headers=headers,
-                ) as resp:
-                    if resp.status >= 400:
-                        error_text = await resp.text()
-                        raise APIStatusError(
-                            message=f"volcengine tts http error: {error_text}",
-                            status_code=resp.status,
-                        )
-                    got_audio = False
-                    async for line in resp.content:
-                        if not line:
-                            continue
-                        done, chunk = parse_http_stream_event(line)
-                        if chunk:
-                            if first_response:
-                                elapsed_time = time.perf_counter() - start_time
-                                logger.info(
-                                    "tts first response",
-                                    extra={"spent": round(elapsed_time, 4)},
-                                )
-                                first_response = False
-                            got_audio = True
-                            emitter.push(data=chunk)
-                        if done:
-                            break
-                    if not got_audio:
-                        raise APIStatusError(
-                            message="volcengine tts returned no audio data"
-                        )
+                await self._synthesize_sentence(sentence, emitter)
                 emitter.end_segment()
                 logger.info("tts end")
                 self._pushed_text = self._pushed_text.replace(sentence, "")
+
+    async def _synthesize_sentence(
+        self, sentence: str, emitter: tts.AudioEmitter
+    ) -> None:
+        tts_inst: TTS = self._tts
+        if tts_inst._use_small_tts:
+            await self._synthesize_small(sentence, emitter)
+            return
+
+        try:
+            await self._synthesize_big(sentence, emitter)
+        except ConcurrentQuotaExceededError:
+            fallback_voice = infer_fallback_voice(self._opts.voice)
+            logger.warning(
+                "volcengine tts concurrency exceeded; falling back to small model",
+                extra={
+                    "voice": self._opts.voice,
+                    "fallback_voice": fallback_voice,
+                },
+            )
+            tts_inst._use_small_tts = True
+            await self._synthesize_small(sentence, emitter)
+
+    async def _synthesize_big(
+        self, sentence: str, emitter: tts.AudioEmitter
+    ) -> None:
+        reqid = utils.shortuuid()
+        payload = self._opts.get_http_request(
+            sentence, reqid=reqid, uid=utils.shortuuid()
+        )
+        headers = self._opts.get_http_header(reqid=reqid)
+        first_response = True
+        start_time = time.perf_counter()
+        async with self._session.post(
+            self._opts.get_http_url(),
+            json=payload,
+            timeout=aiohttp.ClientTimeout(
+                total=300,
+                sock_connect=self._conn_options.timeout,
+            ),
+            headers=headers,
+        ) as resp:
+            if resp.status >= 400:
+                error_text = await resp.text()
+                if is_concurrency_quota_error(error_text):
+                    raise ConcurrentQuotaExceededError(
+                        message=f"volcengine tts http error: {error_text}"
+                    )
+                raise APIStatusError(
+                    message=f"volcengine tts http error: {error_text}",
+                    status_code=resp.status,
+                )
+            got_audio = False
+            async for line in resp.content:
+                if not line:
+                    continue
+                done, chunk = parse_http_stream_event(line)
+                if chunk:
+                    if first_response:
+                        elapsed_time = time.perf_counter() - start_time
+                        logger.info(
+                            "tts first response",
+                            extra={"spent": round(elapsed_time, 4)},
+                        )
+                        first_response = False
+                    got_audio = True
+                    emitter.push(data=chunk)
+                if done:
+                    break
+            if not got_audio:
+                raise APIStatusError(
+                    message="volcengine tts returned no audio data"
+                )
+
+    async def _synthesize_small(
+        self, sentence: str, emitter: tts.AudioEmitter
+    ) -> None:
+        fallback_voice = infer_fallback_voice(self._opts.voice)
+        pool = self._tts._ensure_small_pool()
+
+        async def _send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            data = self._opts.get_ws_query_params(
+                sentence, voice=fallback_voice
+            )
+            await ws.send_bytes(data)
+
+        async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            first_response = True
+            start_time = time.perf_counter()
+            while True:
+                res = await ws.receive_bytes()
+                done, data = parse_response(res)
+                if data is not None:
+                    if first_response:
+                        logger.info(
+                            "tts first response",
+                            extra={
+                                "spent": round(
+                                    time.perf_counter() - start_time, 4
+                                )
+                            },
+                        )
+                        first_response = False
+                    emitter.push(data=data)
+                if done:
+                    break
+
+        async with pool.connection(
+            timeout=self._conn_options.timeout
+        ) as ws:
+            tasks = [
+                asyncio.create_task(_send_task(ws)),
+                asyncio.create_task(_recv_task(ws)),
+            ]
+            try:
+                await asyncio.gather(*tasks)
+            finally:
+                await utils.aio.gracefully_cancel(*tasks)
 
 
 def parse_http_stream_event(line: bytes) -> tuple[bool, ByteString | None]:
@@ -277,7 +465,10 @@ def parse_http_stream_event(line: bytes) -> tuple[bool, ByteString | None]:
         return True, None
 
     message = payload.get("message", "unknown error")
-    raise APIStatusError(message=f"volcengine tts server error: {message}")
+    full_message = f"volcengine tts server error: {message}"
+    if is_concurrency_quota_error(message):
+        raise ConcurrentQuotaExceededError(message=full_message)
+    raise APIStatusError(message=full_message)
 
 
 def parse_response(res: bytes) -> Tuple[bool, ByteString | None]:

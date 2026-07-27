@@ -16,6 +16,7 @@
 - `volcengine.TTS` 默认音色为 `zh_female_xiaohe_uranus_bigtts`
 - `volcengine.STT` 现已直接使用豆包大模型流式语音识别接口
 - `volcengine.STT` 已补齐新版握手头 `X-Api-Connect-Id`
+- `volcengine.TTS` 在大模型并发超限时自动 sticky 回退到语音合成小模型版（V1 WebSocket）
 
 ## ✨ 特性
 
@@ -389,6 +390,16 @@ volcengine.TTS(
 - `seed-icl-1.0` / `seed-icl-1.0-concurr`：豆包声音复刻模型 1.0
 
 `seed-tts-*` 只能调用语音合成音色，`seed-icl-*` 只能调用声音复刻音色。插件会根据音色 ID 后缀自动选择匹配的 `resource_id`。
+
+### TTS 并发回退
+
+当大模型返回并发超限（`quota exceeded for types: concurrency`）时，当前 `TTS` 实例会 sticky 回退到语音合成小模型版（V1 WebSocket）：
+
+- 女声（`voice` 含 `female`）→ `BV001_streaming`
+- 男声（`voice` 含 `male`）→ `BV002_streaming`
+- `cluster` 固定为 `volcano_tts`
+
+触发后同一实例后续合成不再尝试大模型；需确保应用已开通「语音合成（小模型版）」。
 
 ### STT (语音识别)
 
