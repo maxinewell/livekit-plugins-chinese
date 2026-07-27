@@ -27,16 +27,42 @@ def test_bigmodel_stt_ws_header_includes_connect_id() -> None:
     )
 
     assert headers["X-Api-Connect-Id"] == "request-id"
+    assert headers["X-Api-Request-Id"] == "request-id"
+    assert headers["X-Api-Sequence"] == "-1"
+    assert headers["X-Api-App-Key"] == "app"
+    assert headers["X-Api-Access-Key"] == "token"
+    assert headers["X-Api-Resource-Id"] == "volc.seedasr.sauc.duration"
+    assert "X-Api-Key" not in headers
+
+
+def test_bigmodel_stt_ws_header_uses_new_console_api_key() -> None:
+    headers = STTOptions(api_key="new-console-key").get_ws_header(reqid="request-id")
+
+    assert headers["X-Api-Key"] == "new-console-key"
+    assert headers["X-Api-Sequence"] == "-1"
+    assert headers["X-Api-Resource-Id"] == "volc.seedasr.sauc.duration"
+    assert "X-Api-App-Key" not in headers
+    assert "X-Api-Access-Key" not in headers
+
+
+def test_bigmodel_stt_ws_header_defaults_to_seedasr_concurrent() -> None:
+    headers = STTOptions(
+        app_id="app",
+        access_token="token",
+        source_type="concurrent",
+    ).get_ws_header(reqid="request-id")
+
+    assert headers["X-Api-Resource-Id"] == "volc.seedasr.sauc.concurrent"
 
 
 def test_bigmodel_stt_ws_header_accepts_custom_resource_id() -> None:
     headers = STTOptions(
         app_id="app",
         access_token="token",
-        resource_id="volc.seedasr.sauc.duration",
+        resource_id="volc.bigasr.sauc.duration",
     ).get_ws_header(reqid="request-id")
 
-    assert headers["X-Api-Resource-Id"] == "volc.seedasr.sauc.duration"
+    assert headers["X-Api-Resource-Id"] == "volc.bigasr.sauc.duration"
 
 
 def test_bigmodel_stt_build_corpus_includes_correct_table() -> None:

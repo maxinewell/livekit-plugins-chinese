@@ -15,7 +15,9 @@
 - `volcengine.TTS` 会根据 `voice` 自动推断 `resource_id`（如 `*_uranus_bigtts` → `seed-tts-2.0`，`*_mars_bigtts` → `seed-tts-1.0`）
 - `volcengine.TTS` 默认音色为 `zh_female_xiaohe_uranus_bigtts`
 - `volcengine.STT` 现已直接使用豆包大模型流式语音识别接口
-- `volcengine.STT` 已补齐新版握手头 `X-Api-Connect-Id`
+- `volcengine.STT` 默认 `resource_id` 为豆包流式语音识别模型 2.0 小时版（`volc.seedasr.sauc.duration`）
+- `volcengine.STT` 支持新版控制台 `X-Api-Key` 鉴权（`VOLCENGINE_STT_API_KEY`），并兼容旧版 App ID + Access Token
+- `volcengine.STT` 握手头含 `X-Api-Sequence: -1`、`X-Api-Request-Id`、`X-Api-Connect-Id`
 - `volcengine.TTS` 在大模型并发超限时自动 sticky 回退到语音合成小模型版（V1 WebSocket）
 
 ## ✨ 特性
@@ -75,7 +77,9 @@ pip install -e .
 | 环境变量 | 描述 | 获取方式 |
 |----------|------|----------|
 | `VOLCENGINE_TTS_ACCESS_TOKEN` | TTS 服务的访问令牌 | [语音合成控制台](https://console.volcengine.com/speech/service/16) |
-| `VOLCENGINE_STT_ACCESS_TOKEN` | STT 服务的访问令牌 | [语音识别控制台](https://console.volcengine.com/speech/service/16) |
+| `VOLCENGINE_STT_API_KEY` | STT APP Key（新版控制台，推荐） | [快速入门（新版控制台）](https://www.volcengine.com/docs/6561/1257584) |
+| `VOLCENGINE_STT_APP_ID` | STT App ID（旧版控制台） | [语音识别控制台](https://console.volcengine.com/speech/service/16) |
+| `VOLCENGINE_STT_ACCESS_TOKEN` | STT Access Token（旧版控制台） | [语音识别控制台](https://console.volcengine.com/speech/service/16) |
 | `VOLCENGINE_LLM_API_KEY` | LLM 服务的 API 密钥 | [大模型控制台](https://console.volcengine.com/ark/) |
 | `VOLCENGINE_REALTIME_ACCESS_TOKEN` | 实时服务的访问令牌 | [实时语音控制台](https://console.volcengine.com/speech/service/10011) |
 
@@ -84,7 +88,11 @@ pip install -e .
 ```bash
 # .env
 VOLCENGINE_TTS_ACCESS_TOKEN=your_tts_token_here
-VOLCENGINE_STT_ACCESS_TOKEN=your_stt_token_here
+# 新版控制台（推荐）
+VOLCENGINE_STT_API_KEY=your_stt_app_key_here
+# 或旧版控制台
+# VOLCENGINE_STT_APP_ID=your_stt_app_id_here
+# VOLCENGINE_STT_ACCESS_TOKEN=your_stt_token_here
 VOLCENGINE_LLM_API_KEY=your_llm_api_key_here
 VOLCENGINE_REALTIME_ACCESS_TOKEN=your_realtime_token_here
 ```
@@ -129,8 +137,8 @@ from dotenv import load_dotenv
 async def entry_point(ctx: JobContext):
     agent = Agent(instructions="You are a helpful assistant.")
 
-    # 使用豆包大模型流式语音识别
-    stt = volcengine.STT(app_id="your_app_id")
+    # 使用豆包大模型流式语音识别（新版控制台优先传 api_key）
+    stt = volcengine.STT(api_key="your_app_key")
 
     session = AgentSession(
         stt=stt,
@@ -344,8 +352,7 @@ async def entry_point(ctx: JobContext):
     session = AgentSession(
         # 语音识别
         stt=volcengine.STT(
-            app_id="your_stt_app_id",
-            resource_id="volc.seedasr.sauc.duration"
+            api_key="your_stt_app_key",
         ),
         # 语音合成
         tts=volcengine.TTS(
@@ -407,9 +414,10 @@ volcengine.TTS(
 
 ```python
 volcengine.STT(
-    app_id: str | None = None,
-    access_token: str | None = None,
-    resource_id: str | None = None,  # 例如 volc.bigasr.sauc.duration / volc.seedasr.sauc.duration
+    api_key: str | None = None,  # 新版控制台 APP Key；也可用 VOLCENGINE_STT_API_KEY
+    app_id: str | None = None,  # 旧版 App ID；也可用 VOLCENGINE_STT_APP_ID
+    access_token: str | None = None,  # 旧版 Access Token；也可用 VOLCENGINE_STT_ACCESS_TOKEN
+    resource_id: str | None = None,  # 默认 volc.seedasr.sauc.duration（2.0 小时版）；1.0 用 volc.bigasr.sauc.duration
     model_name: str = "bigmodel",
     enable_itn: bool = False,
     enable_punc: bool = True,
@@ -419,6 +427,8 @@ volcengine.STT(
     force_to_speech_time: int = 1000,
 )
 ```
+
+鉴权优先级：有 `api_key` / `VOLCENGINE_STT_API_KEY` 时走新版 `X-Api-Key`；否则走旧版 `X-Api-App-Key` + `X-Api-Access-Key`。
 
 ### LLM (大语言模型)
 

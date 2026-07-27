@@ -80,6 +80,7 @@ def generate_before_payload(sequence: int):
 class STTOptions:
     app_id: str | None = None
     access_token: str | None = None
+    api_key: str | None = None
     source_type: Literal["duration", "concurrent"] = "duration"
     resource_id: str | None = None
 
@@ -194,27 +195,43 @@ class STTOptions:
         return audio_only_request
 
     def get_ws_header(self, reqid: str | None = None) -> dict[str, str]:
-        header = {}
         if reqid is None:
             reqid = utils.shortuuid()
+
         if self.resource_id is not None:
-            header["X-Api-Resource-Id"] = self.resource_id
+            resource_id = self.resource_id
         elif self.source_type == "duration":
-            header["X-Api-Resource-Id"] = "volc.bigasr.sauc.duration"
+            resource_id = "volc.seedasr.sauc.duration"
         else:
-            header["X-Api-Resource-Id"] = "volc.bigasr.sauc.concurrent"
+            resource_id = "volc.seedasr.sauc.concurrent"
+
+        header: dict[str, str] = {
+            "X-Api-Resource-Id": resource_id,
+            "X-Api-Request-Id": reqid,
+            "X-Api-Connect-Id": reqid,
+            "X-Api-Sequence": "-1",
+        }
+
+        # New console auth: X-Api-Key only.
+        # https://www.volcengine.com/docs/6561/1354869
+        if self.api_key is None:
+            self.api_key = os.environ.get("VOLCENGINE_STT_API_KEY")
+        if self.api_key:
+            header["X-Api-Key"] = self.api_key
+            return header
+
+        # Legacy console auth: App ID + Access Token.
         if self.app_id is None:
-            self.app_id = os.environ.get("VOLCENGINE_STT_APP_ID", None)
-            if self.app_id is None:
-                raise ValueError("VOLCENGINE_STT_APP_ID is not set")
+            self.app_id = os.environ.get("VOLCENGINE_STT_APP_ID")
         if self.access_token is None:
-            self.access_token = os.environ.get("VOLCENGINE_STT_ACCESS_TOKEN", None)
-            if self.access_token is None:
-                raise ValueError("VOLCENGINE_STT_ACCESS_TOKEN is not set")
-        header["X-Api-Access-Key"] = self.access_token
+            self.access_token = os.environ.get("VOLCENGINE_STT_ACCESS_TOKEN")
+        if not self.app_id or not self.access_token:
+            raise ValueError(
+                "set VOLCENGINE_STT_API_KEY (new console) or "
+                "VOLCENGINE_STT_APP_ID + VOLCENGINE_STT_ACCESS_TOKEN (legacy console)"
+            )
         header["X-Api-App-Key"] = self.app_id
-        header["X-Api-Connect-Id"] = reqid
-        header["X-Api-Request-Id"] = reqid
+        header["X-Api-Access-Key"] = self.access_token
         return header
 
 
@@ -225,6 +242,7 @@ class STT(stt.STT):
         app_id: str | None = None,
         base_url: str = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel",
         access_token: str | None = None,
+        api_key: str | None = None,
         resource_id: str | None = None,
         model_name: str = "bigmodel",
         enable_itn: bool = False,
@@ -252,6 +270,7 @@ class STT(stt.STT):
         self._opts = STTOptions(
             base_url=base_url,
             access_token=access_token,
+            api_key=api_key,
             app_id=app_id,
             resource_id=resource_id,
             model_name=model_name,
@@ -436,6 +455,20 @@ class SpeechStream(stt.SpeechStream):
             )
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
+        except aiohttp.WSServerHandshakeError as e:
+            resource_id = self._opts.resource_id or (
+                "volc.seedasr.sauc.duration"
+                if self._opts.source_type == "duration"
+                else "volc.seedasr.sauc.concurrent"
+            )
+            raise APIConnectionError(
+                f"Failed to connect to Volcengine STT "
+                f"(status={e.status}, resource_id={resource_id}, "
+                f"url={self._opts.get_ws_url()}). "
+                f"If status=400 and resource is volc.seedasr.*, open "
+                f"豆包流式语音识别模型2.0 for this app in the console "
+                f"(error often: resourceId ... is not allowed)."
+            ) from e
         except aiohttp.ClientError as e:
             raise APIConnectionError("Failed to connect to Volcengine") from e
         return ws
