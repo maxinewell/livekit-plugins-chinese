@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
 from typing import Dict, Literal
 
 import aiohttp
+from aiohttp import WSMsgType
 from pydantic import BaseModel, Field
 from osc_data.text_stream import TextStreamSentencizer
 
 from livekit.agents import (
     APIConnectOptions,
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
     tts,
     utils,
 )
@@ -19,9 +24,14 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from .log import logger
 
 
+DONE_EVENT = "[DONE]"
+
+
 class TTSOptions(BaseModel):
     api_key: str
-    base_url: str = "https://api.minimax.chat/v1/t2a_v2"
+    group_id: str | None = None
+    base_url: str = "https://api.minimaxi.com/v1/t2a_v2"
+    ws_base_url: str = "wss://api.minimaxi.com/ws/v1/t2a_v2"
     model: Literal[
         "speech-2.8-hd",
         "speech-2.8-turbo",
@@ -31,7 +41,7 @@ class TTSOptions(BaseModel):
         "speech-02-turbo",
         "speech-01-hd",
         "speech-01-turbo",
-    ] = "speech-02-hd"
+    ] = "speech-2.8-turbo"
     language_boost: Literal[
         "Chinese",
         "Chinese,Yue",
@@ -57,6 +67,22 @@ class TTSOptions(BaseModel):
         "Czech",
         "Finnish",
         "Hindi",
+        "Bulgarian",
+        "Danish",
+        "Hebrew",
+        "Malay",
+        "Persian",
+        "Slovak",
+        "Swedish",
+        "Croatian",
+        "Filipino",
+        "Hungarian",
+        "Norwegian",
+        "Slovenian",
+        "Catalan",
+        "Nynorsk",
+        "Tamil",
+        "Afrikaans",
         "auto",
     ] = "auto"
 
@@ -119,8 +145,10 @@ class TTSOptions(BaseModel):
         "Serene_Woman",
     ] = "male-qn-jingying"
 
-    def get_http_url(self):
-        return f"{self.base_url}"
+    def get_ws_url(self) -> str:
+        if self.group_id:
+            return f"{self.ws_base_url}?GroupId={self.group_id}"
+        return self.ws_base_url
 
     def get_http_header(self):
         headers = {
@@ -129,13 +157,11 @@ class TTSOptions(BaseModel):
         }
         return headers
 
-    def get_query_params(self, text: str) -> Dict:
-        request_json = {
-            "model": "speech-02-turbo",
-            "text": text,
-            "stream": True,
+    def get_task_start_payload(self) -> Dict:
+        return {
+            "event": "task_start",
+            "model": self.model,
             "language_boost": self.language_boost,
-            "output_format": "hex",
             "voice_setting": {
                 "voice_id": self.voice_id,
                 "speed": self.speed,
@@ -146,15 +172,78 @@ class TTSOptions(BaseModel):
                 "sample_rate": self.sample_rate,
                 "bitrate": self.bitrate,
                 "format": self.audio_format,
+                "channel": self.num_channels,
             },
         }
-        return request_json
+
+    @staticmethod
+    def get_task_continue_payload(text: str) -> Dict:
+        return {"event": "task_continue", "text": text}
+
+    @staticmethod
+    def get_task_finish_payload() -> Dict:
+        return {"event": "task_finish"}
+
+
+def _is_retryable_status_code(status_code: int) -> bool:
+    # Common transient codes from MiniMax docs.
+    return status_code in {1000, 1001, 1002, 1039, 2201, 2205}
+
+
+def _parse_minimax_ws_payload(payload: dict) -> tuple[bool, bytes | None]:
+    base_resp = payload.get("base_resp")
+    if isinstance(base_resp, dict):
+        status_code = int(base_resp.get("status_code", 0))
+        if status_code != 0:
+            raise APIStatusError(
+                message=base_resp.get("status_msg", "minimax tts server error"),
+                status_code=status_code,
+                body=payload,
+                retryable=_is_retryable_status_code(status_code),
+            )
+
+    data = payload.get("data")
+    if isinstance(data, dict):
+        audio_hex = data.get("audio")
+        if audio_hex:
+            try:
+                return False, bytes.fromhex(audio_hex)
+            except ValueError as exc:
+                raise APIStatusError(
+                    message="minimax tts returned invalid hex audio chunk",
+                    body=payload,
+                    retryable=False,
+                ) from exc
+
+    # WebSocket synchronous responses generally signal completion with is_final
+    if payload.get("is_final") is True:
+        return True, None
+
+    event = payload.get("event")
+    if event == "task_finished":
+        return True, None
+    if event in {"task_failed", "error"}:
+        raise APIStatusError(
+            message=str(payload.get("message", "minimax tts task failed")),
+            body=payload,
+            retryable=False,
+        )
+
+    if payload.get("error") or payload.get("message"):
+        raise APIStatusError(
+            message=str(payload.get("error") or payload.get("message")),
+            body=payload,
+            retryable=False,
+        )
+
+    return False, None
 
 
 class TTS(tts.TTS):
     def __init__(
         self,
         api_key: str | None = None,
+        group_id: str | None = None,
         model: Literal[
             "speech-2.8-hd",
             "speech-2.8-turbo",
@@ -164,7 +253,7 @@ class TTS(tts.TTS):
             "speech-02-turbo",
             "speech-01-hd",
             "speech-01-turbo",
-        ] = "speech-02-turbo",
+        ] = "speech-2.8-turbo",
         language_boost: Literal[
             "Chinese",
             "Chinese,Yue",
@@ -200,7 +289,7 @@ class TTS(tts.TTS):
         num_channels: Literal[1, 2] = 1,
         speed: float = 1.0,
         volume: float = 1.0,
-        pitch: float = 0.0,
+        pitch: int = 0,
         voice_id: Literal[
             "male-qn-qingse",
             "male-qn-jingying",
@@ -255,7 +344,7 @@ class TTS(tts.TTS):
 
         Args:
             api_key (str | None, optional):  API key. Defaults to None.
-            model (Literal[ "speech-2.8-hd", "speech-2.8-turbo", "speech-2.6-hd", "speech-2.6-turbo", "speech-02-hd", "speech-02-turbo", "speech-01-hd", "speech-01-turbo" ], optional):  Model. Defaults to "speech-02-turbo".
+            model (Literal[ "speech-2.8-hd", "speech-2.8-turbo", "speech-2.6-hd", "speech-2.6-turbo", "speech-02-hd", "speech-02-turbo", "speech-01-hd", "speech-01-turbo" ], optional):  Model. Defaults to "speech-2.8-turbo".
 
         """
         super().__init__(
@@ -267,8 +356,11 @@ class TTS(tts.TTS):
             api_key = os.environ.get("MINIMAX_API_KEY")
         if api_key is None:
             raise ValueError("MINIMAX_API_KEY must be provided")
+        if group_id is None:
+            group_id = os.environ.get("MINIMAX_GROUP_ID")
         self._opts = TTSOptions(
             api_key=api_key,
+            group_id=group_id,
             model=model,
             language_boost=language_boost,
             sample_rate=sample_rate,
@@ -319,7 +411,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         emitter.initialize(
             request_id=request_id,
             sample_rate=self._opts.sample_rate,
-            mime_type="audio/pcm",
+            mime_type=(
+                "audio/mpeg" if self._opts.audio_format == "mp3" else "audio/pcm"
+            ),
             stream=True,
             num_channels=1,
         )
@@ -343,27 +437,77 @@ class SynthesizeStream(tts.SynthesizeStream):
                     emitter.start_segment(segment_id=utils.shortuuid())
                     first_response_spend = None
                     logger.info("tts start", extra={"sentence": sentence})
-                    data = self._opts.get_query_params(text=sentence)
-                    if first_response_spend is None:
-                        start_time = time.perf_counter()
-                    async with self._session.post(
-                        self._opts.get_http_url(),
-                        json=data,
-                        timeout=aiohttp.ClientTimeout(
-                            total=300,
-                            sock_connect=self._conn_options.timeout,
-                        ),
-                        headers=self._opts.get_http_header(),
-                    ) as resp:
-                        resp.raise_for_status()
-                        resp.content._high_water = (
-                            resp.content._high_water**2
-                        )  # 可能会出现内存占用过高的情况，暂时没找到更好方法
-                        async for data in resp.content:
-                            if data[:5] == b"data:":
-                                data = json.loads(data[5:])
-                                if "data" in data and "extra_info" not in data:
-                                    audio = data["data"]["audio"]
+                    start_time = time.perf_counter()
+                    try:
+                        async with self._session.ws_connect(
+                            self._opts.get_ws_url(),
+                            timeout=aiohttp.ClientTimeout(
+                                total=300,
+                                sock_connect=self._conn_options.timeout,
+                            ),
+                            headers=self._opts.get_http_header(),
+                        ) as ws:
+                            # 1) connected_success
+                            msg = await ws.receive()
+                            if msg.type != WSMsgType.TEXT:
+                                raise APIStatusError(
+                                    message="minimax tts websocket handshake failed",
+                                    retryable=False,
+                                )
+                            payload = json.loads(msg.data)
+                            event = payload.get("event")
+                            if event != "connected_success":
+                                _parse_minimax_ws_payload(payload)
+                                raise APIStatusError(
+                                    message=f"minimax tts unexpected handshake event: {event}",
+                                    body=payload,
+                                    retryable=False,
+                                )
+
+                            # 2) task_start -> expect task_started
+                            await ws.send_json(self._opts.get_task_start_payload())
+                            msg = await ws.receive()
+                            if msg.type != WSMsgType.TEXT:
+                                raise APIStatusError(
+                                    message="minimax tts task_start failed",
+                                    retryable=False,
+                                )
+                            payload = json.loads(msg.data)
+                            event = payload.get("event")
+                            if event != "task_started":
+                                _parse_minimax_ws_payload(payload)
+                                raise APIStatusError(
+                                    message=f"minimax tts unexpected task_start response: {event}",
+                                    body=payload,
+                                    retryable=False,
+                                )
+
+                            # 3) send text and finish
+                            await ws.send_json(
+                                self._opts.get_task_continue_payload(sentence)
+                            )
+                            await ws.send_json(self._opts.get_task_finish_payload())
+
+                            got_audio = False
+                            while True:
+                                msg = await ws.receive()
+                                if msg.type == WSMsgType.TEXT:
+                                    payload = json.loads(msg.data)
+                                    done, chunk = _parse_minimax_ws_payload(payload)
+                                elif msg.type == WSMsgType.BINARY:
+                                    # T2A v2 currently returns hex audio in TEXT frames.
+                                    done, chunk = False, None
+                                elif msg.type in {WSMsgType.CLOSE, WSMsgType.CLOSING}:
+                                    done, chunk = True, None
+                                elif msg.type == WSMsgType.ERROR:
+                                    raise APIConnectionError(
+                                        message="minimax tts websocket error",
+                                        retryable=first_response_spend is None,
+                                    )
+                                else:
+                                    done, chunk = False, None
+
+                                if chunk is not None:
                                     if first_response_spend is None:
                                         first_response_spend = (
                                             time.perf_counter() - start_time
@@ -372,9 +516,30 @@ class SynthesizeStream(tts.SynthesizeStream):
                                             "tts first response",
                                             extra={"spent": str(first_response_spend)},
                                         )
-                                    # audio hex编码
-                                    audio = bytes.fromhex(audio)
-                                    emitter.push(audio)
+                                    got_audio = True
+                                    emitter.push(chunk)
+                                if done:
+                                    break
+
+                            if not got_audio:
+                                raise APIStatusError(
+                                    message="minimax tts returned no audio data",
+                                    retryable=False,
+                                )
+                    except json.JSONDecodeError as exc:
+                        raise APIStatusError(
+                            message="minimax tts returned invalid websocket json payload",
+                            retryable=False,
+                        ) from exc
+                    except asyncio.TimeoutError as exc:
+                        raise APITimeoutError(
+                            retryable=first_response_spend is None
+                        ) from exc
+                    except aiohttp.ClientError as exc:
+                        raise APIConnectionError(
+                            message="minimax tts connection failed",
+                            retryable=first_response_spend is None,
+                        ) from exc
                     emitter.end_segment()
                     self._pushed_text = self._pushed_text.replace(sentence, "")
                     logger.info("tts end")

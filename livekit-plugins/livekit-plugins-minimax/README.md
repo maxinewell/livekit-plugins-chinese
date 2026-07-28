@@ -4,7 +4,7 @@
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](https://opensource.org/licenses/Apache-2.0)
 
-MiniMax (海螺AI) 服务专用的 [LiveKit Agents](https://github.com/livekit/agents) 插件，提供完整的语音和语言模型集成解决方案。
+MiniMax (海螺AI) 服务专用的 [LiveKit Agents](https://github.com/livekit/agents) 插件，提供语音合成与大语言模型集成能力。
 
 ## ✨ 特性
 
@@ -38,8 +38,8 @@ pip install -e ./livekit-plugins/livekit-plugins-minimax
 
 ### 系统要求
 
-- Python >= 3.9
-- LiveKit Agents >= 1.2.9
+- Python >= 3.10
+- LiveKit Agents == 1.5.4
 
 ## ⚙️ 配置
 
@@ -50,14 +50,15 @@ pip install -e ./livekit-plugins/livekit-plugins-minimax
 | 环境变量 | 描述 | 获取方式 |
 |----------|------|----------|
 | `MINIMAX_API_KEY` | MiniMax API密钥 | [MiniMax控制台](https://platform.minimaxi.com/user-center/basic-information/interface-key) |
-| `MINIMAX_GROUP_ID` | MiniMax Group ID | [MiniMax控制台](https://platform.minimaxi.com/user-center/basic-information/interface-key) |
+| `MINIMAX_GROUP_ID` | MiniMax Group ID（可选） | [MiniMax控制台](https://platform.minimaxi.com/user-center/basic-information/interface-key) |
 
 ### .env 文件示例
 
 ```bash
 # .env
 MINIMAX_API_KEY=your_api_key_here
-MINIMAX_GROUP_ID=your_group_id_here
+# 可选：仅在账号或网关策略要求时配置
+# MINIMAX_GROUP_ID=your_group_id_here
 ```
 
 ## 📖 使用指南
@@ -73,8 +74,8 @@ async def entry_point(ctx: JobContext):
     agent = Agent(instructions="You are a helpful assistant.")
 
     session = AgentSession(
-        # 语音识别 - 参数可在MiniMax控制台获取
-        stt=minimax.STT(model="speech-01-turbo", voice_id="female-tianmei"),
+        # 语音合成 - 参数可在MiniMax控制台获取
+        tts=minimax.TTS(model="speech-2.8-turbo", voice_id="female-tianmei"),
         # 大语言模型
         llm=minimax.LLM(model="MiniMax-Text-01")
     )
@@ -94,12 +95,14 @@ from livekit.plugins import minimax
 
 # 自定义TTS配置
 tts = minimax.TTS(
-    model="speech-01-turbo",     # 模型名称
+    model="speech-2.8-turbo",    # 模型名称
     voice_id="female-tianmei",   # 语音ID
+    language_boost="auto",       # 语言增强
     speed=1.0,                   # 语速 (0.5-2.0)
-    vol=1.0,                     # 音量 (0.0-2.0)
+    volume=1.0,                  # 音量 (0.0-10.0)
     pitch=0,                     # 音调 (-12到12)
-    emotion="neutral"            # 情感 (neutral, happy, sad, angry)
+    sample_rate=16000,           # 采样率
+    audio_format="pcm"           # 输出格式 (pcm/mp3/flac/wav)
 )
 
 # 自定义LLM配置
@@ -117,12 +120,17 @@ llm = minimax.LLM(
 
 ```python
 minimax.TTS(
-    model: str = "speech-01-turbo",     # 模型名称
-    voice_id: str = "female-tianmei",   # 语音ID
-    speed: float = 1.0,                # 语速 (0.5-2.0)
-    vol: float = 1.0,                  # 音量 (0.0-2.0)
-    pitch: int = 0,                    # 音调 (-12到12)
-    emotion: str = "neutral"           # 情感
+    api_key: str | None = None,                 # 默认读 MINIMAX_API_KEY
+    group_id: str | None = None,                # 可选；默认读 MINIMAX_GROUP_ID
+    model: str = "speech-2.8-turbo",            # 模型名称
+    voice_id: str = "male-qn-jingying",         # 语音ID
+    language_boost: str = "auto",               # 语言增强
+    speed: float = 1.0,                         # 语速 (0.5-2.0)
+    volume: float = 1.0,                        # 音量 (0.0-10.0)
+    pitch: int = 0,                             # 音调 (-12到12)
+    sample_rate: int = 8000,                    # 采样率
+    audio_format: str = "pcm",                  # 输出格式
+    bitrate: int = 128000                       # 仅 mp3 生效
 )
 ```
 
@@ -166,10 +174,28 @@ A: MiniMax支持多种对话模型：
 ### Q: 如何调整语音参数？
 
 A: 可以通过以下参数调整语音效果：
-- `speed`: 控制语速，范围0.5-2.0
-- `vol`: 控制音量，范围0.0-2.0
-- `pitch`: 控制音调，范围-12到12
-- `emotion`: 设置情感，如neutral、happy、sad、angry
+- `speed`: 控制语速，范围 0.5-2.0
+- `volume`: 控制音量，范围 0.0-10.0
+- `pitch`: 控制音调，范围 -12 到 12
+- `language_boost`: 语言增强（如 `Chinese`、`English`、`auto`）
+- `audio_format`: 输出格式（`pcm`/`mp3`/`flac`/`wav`）
+
+### Q: TTS 初始化失败常见原因？
+
+A: 常见原因如下：
+- 缺少 `MINIMAX_API_KEY`
+- `voice_id`、`model` 或采样参数不在允许范围
+
+### Q: 插件如何处理 TTS 错误？
+
+A: TTS 现在已覆盖以下错误类型：
+- WebSocket 连接/协议错误
+- 请求超时
+- 网络连接失败
+- WebSocket 响应 JSON 解析失败
+- 音频 hex 解码失败
+- 服务端业务错误（`base_resp.status_code != 0`）
+- 返回流结束但无音频数据
 
 ## 📝 更新日志
 
@@ -177,6 +203,12 @@ A: 可以通过以下参数调整语音效果：
 - 支持MiniMax语音合成和对话模型
 - 支持多种音色和情感表达
 - 完善的API文档和使用示例
+
+### v1.2.10
+- TTS 新增可选 `group_id` 参数（支持 `MINIMAX_GROUP_ID` 环境变量）
+- 修复 TTS 请求体 `model` 参数未生效问题
+- WebSocket 对接同步语音合成（`task_start`/`task_continue`/`task_finish`）
+- 增强 TTS 错误处理：超时/连接/流式解析/业务错误全覆盖
 
 ## 🤝 贡献
 
