@@ -9,7 +9,7 @@
 ## ✨ 特性
 
 - 🎤 **语音识别 (STT)** - 支持阿里云Paraformer语音识别服务
-- 🗣️ **语音合成 (TTS)** - 支持阿里云CosyVoice文本转语音服务
+- 🗣️ **语音合成 (TTS)** - 支持阿里云 Qwen-TTS Realtime（`commit` 模式）文本转语音服务
 - 🤖 **大语言模型 (LLM)** - 支持阿里云Qwen系列大模型
 - 🔧 **热词功能** - 支持STT热词识别增强
 - 📦 **开箱即用** - 完整的 Python 包支持
@@ -76,7 +76,7 @@ async def entry_point(ctx: JobContext):
         # 语音识别
         stt=aliyun.STT(model="paraformer-realtime-v2"),
         # 语音合成
-        tts=aliyun.TTS(model="cosyvoice-v2", voice="longcheng_v2"),
+        tts=aliyun.TTS(model="qwen3-tts-flash-realtime", voice="Cherry"),
         # 大语言模型
         llm=aliyun.LLM(model="qwen-plus")
     )
@@ -107,7 +107,7 @@ async def entry_point(ctx: JobContext):
             model="paraformer-realtime-v2",
             vocabulary_id="your_vocabulary_id"  # 热词表ID
         ),
-        tts=aliyun.TTS(model="cosyvoice-v2", voice="longcheng_v2"),
+        tts=aliyun.TTS(model="qwen3-tts-flash-realtime", voice="Cherry"),
         llm=aliyun.LLM(model="qwen-plus")
     )
 
@@ -126,11 +126,10 @@ from livekit.plugins import aliyun
 
 # 自定义TTS配置
 tts = aliyun.TTS(
-    model="cosyvoice-v2",
-    voice="longcheng_v2",  # 语音类型
-    speech_rate=1.0,      # 语速 (0.5-2.0)
-    pitch_rate=1.0,       # 音调 (0.5-2.0)
-    volume=50             # 音量 (0-100)
+    model="qwen3-tts-flash-realtime",  # 模型名称
+    voice="Cherry",           # 语音类型
+    sample_rate=24000,        # 采样率
+    language_type="Auto",     # 语言类型
 )
 
 # 自定义LLM配置
@@ -153,13 +152,16 @@ stt = aliyun.STT(
 
 ### TTS (文本转语音)
 
+基于 Qwen-TTS Realtime WebSocket 接口的 `commit` 模式实现：每个句子独立 append + commit，
+并等待该句 `response.done` 后再处理下一句。
+
 ```python
 aliyun.TTS(
-    model: str = "cosyvoice-v2",      # 模型名称
-    voice: str = "longcheng_v2",      # 语音类型
-    speech_rate: float = 1.0,        # 语速 (0.5-2.0)
-    pitch_rate: float = 1.0,         # 音调 (0.5-2.0)
-    volume: int = 50                 # 音量 (0-100)
+    model: str = "qwen3-tts-flash-realtime",
+    voice: str = "Cherry",
+    sample_rate: int = 24000,
+    language_type: str = "Auto",
+    base_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime",  # 默认北京 Realtime 端点
 )
 ```
 
@@ -192,10 +194,7 @@ A: 请访问[阿里云控制台](https://bailian.console.aliyun.com/)，在DashS
 
 ### Q: 支持哪些语音合成模型？
 
-A: 支持多种阿里云语音合成模型，包括：
-- `cosyvoice-v2` - CosyVoice v2 模型
-- `sambert-zhichu` - 智谱系列模型
-- 其他阿里云TTS支持的模型
+A: 本插件使用阿里云 Qwen-TTS Realtime 的 `commit` 模式，默认模型为 `qwen3-tts-flash-realtime`（默认音色 `Cherry`）。
 
 ### Q: 如何创建和管理热词表？
 
