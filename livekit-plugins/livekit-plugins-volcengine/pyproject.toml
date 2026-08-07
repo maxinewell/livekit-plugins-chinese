@@ -14,7 +14,7 @@ dependencies = [
     "osc-data==0.2.2",
     "pydantic",
     "numpy",
-    "livekit-agents==1.5.4",
+    "livekit-agents>=1.5.4",
 ]
 classifiers = [
     "Intended Audience :: Developers",

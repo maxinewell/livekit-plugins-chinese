@@ -8,7 +8,7 @@
 
 ## 最近修改
 
-- 已升级到 `livekit-agents==1.5.4`
+- 要求 `livekit-agents>=1.5.4`
 - Python 要求已更新为 `>=3.10`
 - `volcengine.TTS` 已切换到豆包语音合成大模型 V3 HTTP Chunked 接口
 - `volcengine.TTS` 不再需要 `cluster` 参数

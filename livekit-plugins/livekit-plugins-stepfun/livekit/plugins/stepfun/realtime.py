@@ -298,7 +298,9 @@ class RealtimeModel(llm.RealtimeModel):
 
         return self._http_session
 
-    def session(self) -> RealtimeSession:
+    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
+        # turn_detection_disabled is accepted for livekit-agents>=1.6.x compatibility;
+        # this plugin does not currently honor disabling server-side turn detection.
         sess = RealtimeSession(self)
         self._sessions.add(sess)
         return sess

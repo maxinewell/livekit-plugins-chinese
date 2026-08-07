@@ -24,7 +24,7 @@ pip install -e .
 ## ✅ 版本要求
 
 - Python >= 3.10
-- livekit-agents>=1.2.9
+- livekit-agents>=1.5.4
 
 ## ⚙️ 配置
 

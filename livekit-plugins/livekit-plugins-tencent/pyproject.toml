@@ -10,7 +10,7 @@ authors = [
 keywords = ["webrtc", "realtime", "audio", "livekit", "tencent", "stt", "tts"]
 requires-python = ">=3.10"
 dependencies = [
-    "livekit-agents>=1.2.9",
+    "livekit-agents>=1.5.4",
     "aiohttp>=3.9.0",
     "pydantic>=2.0",
     "requests>=2.25.0",
